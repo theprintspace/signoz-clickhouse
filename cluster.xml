@@ -7,8 +7,8 @@
       -->
     <zookeeper>
         <node index="1">
-            <host from_env="CLICKHOUSE_ZOOKEEPER_HOST">zookeeper-1</host>
-            <port from_env="CLICKHOUSE_ZOOKEEPER_PORT">2181</port>
+            <host from_env="CLICKHOUSE_ZOOKEEPER_HOST" replace="1">zookeeper-1</host>
+            <port from_env="CLICKHOUSE_ZOOKEEPER_PORT" replace="1">2181</port>
         </node>
         <!-- <node index="2">
             <host>zookeeper-2</host>
@@ -52,7 +52,7 @@
                 <!-- Optional. Shard weight when writing data. Default: 1. -->
                 <!-- <weight>1</weight> -->
                 <replica>
-                    <host from_env="CLICKHOUSE_CLUSTER_REPLICA_HOST">clickhouse</host>
+                    <host from_env="CLICKHOUSE_CLUSTER_REPLICA_HOST" replace="1">clickhouse</host>
                     <port>9000</port>
                     <!-- Optional. Priority of the replica for load_balancing. Default: 1 (less value has more priority). -->
                     <!-- <priority>1</priority> -->
