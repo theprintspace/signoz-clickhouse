@@ -431,8 +431,8 @@
                 tls_cipher_suite - allowed cipher suite (in OpenSSL notation).
              Example:
                 <my_ldap_server>
-                    <host>localhost</host>
-                    <port>636</port>
+                    <host replace="1">localhost</host>
+                    <port replace="1">636</port>
                     <bind_dn>uid={user_name},ou=users,dc=example,dc=com</bind_dn>
                     <verification_cooldown>300</verification_cooldown>
                     <enable_tls>yes</enable_tls>
@@ -446,8 +446,8 @@
                 </my_ldap_server>
              Example (typical Active Directory with configured user DN detection for further role mapping):
                 <my_ad_server>
-                    <host>localhost</host>
-                    <port>389</port>
+                    <host replace="1">localhost</host>
+                    <port replace="1">389</port>
                     <bind_dn>EXAMPLE\{user_name}</bind_dn>
                     <user_dn_detection>
                         <base_dn>CN=Users,DC=example,DC=com</base_dn>
@@ -616,8 +616,8 @@
     ]]>
     <!--
     <jdbc_bridge>
-        <host>127.0.0.1</host>
-        <port>9019</port>
+        <host replace="1">127.0.0.1</host>
+        <port replace="1">9019</port>
     </jdbc_bridge>
     -->
 
@@ -633,7 +633,7 @@
             If the host is specified as IP address, it is checked as specified in URL. Example: "[2a02:6b8:a::a]".
             If there are redirects and support for redirects is enabled, every redirect (the Location field) is checked.
             Host should be specified using the host xml tag:
-                    <host>clickhouse.com</host>
+                    <host replace="1">clickhouse.com</host>
         -->
 
         <!-- Regular expression can be specified. RE2 engine is used for regexps.
@@ -681,8 +681,8 @@
     -->
     <!--
     <graphite>
-        <host>localhost</host>
-        <port>42000</port>
+        <host replace="1">localhost</host>
+        <port replace="1">42000</port>
         <timeout>0.1</timeout>
         <interval>60</interval>
         <root_path>one_min</root_path>
@@ -694,8 +694,8 @@
         <asynchronous_metrics>true</asynchronous_metrics>
     </graphite>
     <graphite>
-        <host>localhost</host>
-        <port>42000</port>
+        <host replace="1">localhost</host>
+        <port replace="1">42000</port>
         <timeout>0.1</timeout>
         <interval>1</interval>
         <root_path>one_sec</root_path>
@@ -719,7 +719,7 @@
 
     <prometheus>
         <endpoint>/metrics</endpoint>
-        <port>9363</port>
+        <port replace="1">9363</port>
 
         <metrics>true</metrics>
         <events>true</events>

@@ -17,11 +17,11 @@ RUN set -eux; \
     chmod +x /var/lib/clickhouse/user_scripts/histogramQuantile; \
     rm hq.tgz
 
+ARG CACHEBUST=2
 COPY config.xml          /etc/clickhouse-server/config.xml
 COPY users.xml           /etc/clickhouse-server/users.xml
 COPY custom-function.xml /etc/clickhouse-server/custom-function.xml
 COPY cluster.xml         /etc/clickhouse-server/config.d/cluster.xml
 
-ENV CLICKHOUSE_SKIP_USER_SETUP=1
 
 EXPOSE 9000 8123 9181 9363
