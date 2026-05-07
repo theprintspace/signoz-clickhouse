@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!--
+  Loaded after the upstream clickhouse:25.5.6 entrypoint's auto-written
+  /etc/clickhouse-server/users.d/default-user.xml (which restricts the
+  default user to localhost-only when CLICKHOUSE_USER/CLICKHOUSE_PASSWORD
+  are unset on first deploy and the database directory is fresh).
+
+  ClickHouse merges users.d/ files in alphabetical order; later files win
+  for conflicting settings. The `zz-` prefix guarantees this file loads
+  after `default-user.xml` and re-opens network access for the default
+  user so internal Railway services (otel-collector, signoz-app) can
+  connect at clickhouse.railway.internal:9000.
+
+  Without this override, otel-collector's `migrate sync check` step
+  times out indefinitely because connections from the internal subnet
+  are rejected, even though our /etc/clickhouse-server/users.xml has
+  `<networks><ip>::/0</ip></networks>` (the entrypoint's override
+  file in users.d/ takes precedence over the base users.xml).
+-->
+<clickhouse>
+    <users>
+        <default>
+            <networks replace="replace">
+                <ip>::/0</ip>
+            </networks>
+        </default>
+    </users>
+</clickhouse>
