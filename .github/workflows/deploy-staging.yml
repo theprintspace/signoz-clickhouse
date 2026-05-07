@@ -1,0 +1,104 @@
+name: Deploy to staging
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [staging]
+
+permissions:
+  contents: read
+
+# Per-service deploy workflow for signoz-clickhouse (staging) — first
+# SigNoz custom-build rollout. Uses `railway up` (source-tarball deploy)
+# rather than image-pull-from-registry; matches dev's Railway-builds-the-
+# Dockerfile semantics without needing GHCR or OAuth-bound serviceConnect.
+#
+# Image is built from the Dockerfile in this repo:
+#   FROM clickhouse/clickhouse-server:25.5.6
+#   + histogramQuantile UDF binary
+#   + custom config.xml, users.xml, custom-function.xml, cluster.xml
+#
+# cluster.xml hardcodes zookeeper.railway.internal:2181 and
+# clickhouse.railway.internal:9000 — relies on the bare service names in
+# Railway. Internal-only on tps-staging Railway project.
+#
+# Volume: clickhouse-volume @ /var/lib/clickhouse (50GB, bootstrap-managed).
+#
+# Required setup:
+#   1. Repo secret OP_SERVICE_ACCOUNT_TOKEN — staging SA from Engineering
+#      vault → "Service Account Auth Token: infrastructure staging service
+#      account", field `credential`.
+#   2. 1Password vault `tps-infra-staging` items (already populated by
+#      bootstrap-railway.ps1):
+#        railway/api-token
+#        railway/project-id
+#        railway/environment-id
+#        railway/services/clickhouse
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install 1Password CLI
+        uses: 1password/install-cli-action@v1
+
+      - name: Load secrets from 1Password
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          VAULT='tps-infra-staging'
+
+          read_secret() {
+            local title="$1"
+            local val
+            val=$(op item get "$title" --vault "$VAULT" --fields password --reveal 2>/dev/null || true)
+            if [ -z "$val" ]; then
+              echo "::error::Required vault item '$title' missing or empty in $VAULT" >&2
+              return 1
+            fi
+            echo "$val"
+          }
+
+          RAILWAY_TOKEN=$(read_secret 'railway/api-token')
+          PROJECT_ID=$(read_secret 'railway/project-id')
+          ENVIRONMENT_ID=$(read_secret 'railway/environment-id')
+          SERVICE_ID=$(read_secret 'railway/services/clickhouse')
+
+          echo "::add-mask::$RAILWAY_TOKEN"
+
+          {
+            echo "RAILWAY_TOKEN=$RAILWAY_TOKEN"
+            echo "PROJECT_ID=$PROJECT_ID"
+            echo "ENVIRONMENT_ID=$ENVIRONMENT_ID"
+            echo "SERVICE_ID=$SERVICE_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Build env-vars JSON
+        id: envvars
+        run: |
+          set -euo pipefail
+          # Clickhouse server runtime config is entirely in the baked-in
+          # /etc/clickhouse-server/*.xml files — no env vars needed for
+          # bootstrap. Setting an empty map skips the variableCollectionUpsert
+          # step in the composite action.
+          ENVVARS='{}'
+          {
+            echo 'envvars<<EOF_ENVVARS'
+            echo "$ENVVARS"
+            echo 'EOF_ENVVARS'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Railway
+        uses: theprintspace/infrastructure/.github/actions/deploy-railway-service@main
+        with:
+          railway-token: ${{ env.RAILWAY_TOKEN }}
+          project-id: ${{ env.PROJECT_ID }}
+          environment-id: ${{ env.ENVIRONMENT_ID }}
+          environment-name: production
+          service-id: ${{ env.SERVICE_ID }}
+          service-name: clickhouse
+          env-vars: ${{ steps.envvars.outputs.envvars }}
