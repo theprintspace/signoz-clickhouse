@@ -108,6 +108,39 @@ jobs:
             echo "SERVICE_ID=$SERVICE_ID"
           } >> "$GITHUB_ENV"
 
+      - name: Sync env vars to Railway
+        run: |
+          set -euo pipefail
+          # CLICKHOUSE_USER=default is required to disable the upstream
+          # entrypoint's auto-restriction that writes
+          # /etc/clickhouse-server/users.d/default-user.xml limiting the
+          # default user to localhost-only. Without it, otel-collector
+          # can't connect from clickhouse.railway.internal:9000 — only
+          # 127.0.0.1 connections are allowed and migrations time out
+          # waiting for sync. The override file written by the entrypoint
+          # has higher precedence than our /etc/clickhouse-server/users.xml.
+          ENVVARS=$(jq -nc '{ CLICKHOUSE_USER: "default" }')
+
+          VARS_GQL=$(echo "$ENVVARS" | jq -r '
+            to_entries | map(
+              (.key | gsub("\""; "\\\"")) + ": " +
+              (.value | tojson)
+            ) | join(", ")
+          ')
+
+          body=$(jq -nc \
+            --arg pid "$PROJECT_ID" --arg eid "$ENVIRONMENT_ID" --arg sid "$SERVICE_ID" \
+            --arg vars "$VARS_GQL" \
+            '{query: "mutation { variableCollectionUpsert(input: { projectId: \"\($pid)\", environmentId: \"\($eid)\", serviceId: \"\($sid)\", replace: false, variables: { \($vars) } }) }"}')
+          response=$(curl -fsS -X POST "$RAILWAY_GRAPHQL" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" -d "$body")
+          if echo "$response" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::variableCollectionUpsert: $(echo "$response" | jq -r '.errors[0].message')"
+            exit 1
+          fi
+          echo "::notice::Synced $(echo "$ENVVARS" | jq 'length') env vars"
+
       - name: Update Railway service source + trigger deploy
         env:
           IMAGE: ${{ env.IMAGE_REPO }}:${{ github.sha }}
