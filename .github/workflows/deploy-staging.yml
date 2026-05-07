@@ -7,16 +7,23 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 # Per-service deploy workflow for signoz-clickhouse (staging) — first
-# SigNoz custom-build rollout. Uses `railway up` (source-tarball deploy)
-# rather than image-pull-from-registry; matches dev's Railway-builds-the-
-# Dockerfile semantics without needing GHCR or OAuth-bound serviceConnect.
+# SigNoz custom-build rollout. Builds the Dockerfile here, pushes to
+# ghcr.io/theprintspace/signoz-clickhouse:<sha>, then points the Railway
+# `clickhouse` service at the new image and triggers a deploy via inline
+# GraphQL calls (no cross-repo composite action — this repo is public and
+# wouldn't have a runner-token with read access to the private
+# infrastructure repo).
 #
-# Image is built from the Dockerfile in this repo:
-#   FROM clickhouse/clickhouse-server:25.5.6
-#   + histogramQuantile UDF binary
-#   + custom config.xml, users.xml, custom-function.xml, cluster.xml
+# IMPORTANT: After the first push, the GHCR package will be private by
+# default. Flip it to PUBLIC manually once via the UI:
+#   https://github.com/orgs/theprintspace/packages/container/signoz-clickhouse/settings
+#   → Danger Zone → Change visibility → Public
+# Then re-run this workflow — Railway will be able to pull without
+# registry credentials. (Alternative: store a GHCR PAT at
+# 1P `ghcr/read-token` and we'll wire registry-credentials in.)
 #
 # cluster.xml hardcodes zookeeper.railway.internal:2181 and
 # clickhouse.railway.internal:9000 — relies on the bare service names in
@@ -35,21 +42,45 @@ permissions:
 #        railway/environment-id
 #        railway/services/clickhouse
 
+env:
+  IMAGE_REPO: ghcr.io/theprintspace/signoz-clickhouse
+  RAILWAY_GRAPHQL: https://backboard.railway.com/graphql/v2
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_REPO }}:${{ github.sha }}
+            ${{ env.IMAGE_REPO }}:staging
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Install 1Password CLI
         uses: 1password/install-cli-action@v1
 
-      - name: Load secrets from 1Password
+      - name: Load Railway secrets from 1Password
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
         run: |
           set -euo pipefail
-
           VAULT='tps-infra-staging'
 
           read_secret() {
@@ -77,28 +108,44 @@ jobs:
             echo "SERVICE_ID=$SERVICE_ID"
           } >> "$GITHUB_ENV"
 
-      - name: Build env-vars JSON
-        id: envvars
+      - name: Update Railway service source + trigger deploy
+        env:
+          IMAGE: ${{ env.IMAGE_REPO }}:${{ github.sha }}
         run: |
           set -euo pipefail
-          # Clickhouse server runtime config is entirely in the baked-in
-          # /etc/clickhouse-server/*.xml files — no env vars needed for
-          # bootstrap. Setting an empty map skips the variableCollectionUpsert
-          # step in the composite action.
-          ENVVARS='{}'
-          {
-            echo 'envvars<<EOF_ENVVARS'
-            echo "$ENVVARS"
-            echo 'EOF_ENVVARS'
-          } >> "$GITHUB_OUTPUT"
 
-      - name: Deploy to Railway
-        uses: theprintspace/infrastructure/.github/actions/deploy-railway-service@main
-        with:
-          railway-token: ${{ env.RAILWAY_TOKEN }}
-          project-id: ${{ env.PROJECT_ID }}
-          environment-id: ${{ env.ENVIRONMENT_ID }}
-          environment-name: production
-          service-id: ${{ env.SERVICE_ID }}
-          service-name: clickhouse
-          env-vars: ${{ steps.envvars.outputs.envvars }}
+          # Step 1: serviceInstanceUpdate — point service at the new image.
+          source_input=$(jq -nc --arg img "$IMAGE" '{image: $img}')
+          input_obj=$(jq -nc --argjson src "$source_input" '{source: $src}')
+          body=$(jq -nc \
+            --arg eid "$ENVIRONMENT_ID" --arg sid "$SERVICE_ID" \
+            --argjson input "$input_obj" \
+            '{
+              query: "mutation($eid: String!, $sid: String!, $input: ServiceInstanceUpdateInput!) { serviceInstanceUpdate(environmentId: $eid, serviceId: $sid, input: $input) }",
+              variables: { eid: $eid, sid: $sid, input: $input }
+            }')
+          response=$(curl -fsS -X POST "$RAILWAY_GRAPHQL" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+          if echo "$response" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::serviceInstanceUpdate: $(echo "$response" | jq -r '.errors[0].message')"
+            exit 1
+          fi
+          echo "::notice::Updated source → $IMAGE"
+
+          # Step 2: serviceInstanceDeploy — explicit deploy trigger so identical-image
+          # pushes still cycle the container if env vars or other config changed.
+          body=$(jq -nc \
+            --arg eid "$ENVIRONMENT_ID" --arg sid "$SERVICE_ID" \
+            '{query: "mutation { serviceInstanceDeploy(environmentId: \"\($eid)\", serviceId: \"\($sid)\") }"}')
+          response=$(curl -fsS -X POST "$RAILWAY_GRAPHQL" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$body")
+          if echo "$response" | jq -e '.errors' > /dev/null 2>&1; then
+            msg=$(echo "$response" | jq -r '.errors[0].message')
+            echo "::warning::serviceInstanceDeploy: $msg (likely already deploying — non-fatal)"
+          else
+            echo "::notice::Deploy triggered for $SERVICE_ID"
+          fi
