@@ -111,15 +111,15 @@ jobs:
       - name: Sync env vars to Railway
         run: |
           set -euo pipefail
-          # CLICKHOUSE_USER=default is required to disable the upstream
-          # entrypoint's auto-restriction that writes
-          # /etc/clickhouse-server/users.d/default-user.xml limiting the
-          # default user to localhost-only. Without it, otel-collector
-          # can't connect from clickhouse.railway.internal:9000 — only
-          # 127.0.0.1 connections are allowed and migrations time out
-          # waiting for sync. The override file written by the entrypoint
-          # has higher precedence than our /etc/clickhouse-server/users.xml.
-          ENVVARS=$(jq -nc '{ CLICKHOUSE_USER: "default" }')
+          # CLICKHOUSE_SKIP_USER_SETUP=1 — sourced from dev's working SigNoz
+          # clickhouse env vars. The upstream clickhouse-server entrypoint
+          # checks this flag and SKIPS its auto-modifying users.d/default-user.xml
+          # write entirely. Cleaner than CLICKHOUSE_USER=default (which only
+          # works correctly when the database directory is fresh, not when
+          # the entrypoint takes the 'Skipping initialization' branch).
+          # The zz-network-override.xml in this repo is now redundant but
+          # left in place as belt-and-braces.
+          ENVVARS=$(jq -nc '{ CLICKHOUSE_SKIP_USER_SETUP: "1" }')
 
           VARS_GQL=$(echo "$ENVVARS" | jq -r '
             to_entries | map(
